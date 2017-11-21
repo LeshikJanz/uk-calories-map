@@ -1,7 +1,12 @@
-import React from 'react';
-import { compose, lifecycle, withState, withHandlers, withProps } from 'recompose';
+import { compose, withState, withHandlers } from 'recompose';
 import { EARTH_RADIUS } from "../constants";
 import { CaloriesCalculator } from "../components/index";
+import {
+  CALORIES_BURNING_COEFFICIENT, DONE_TYPING_INTERVAL
+} from "../constants/index";
+import { fetchDistance, fetchPlace } from "../api/index";
+
+let typingTimer;
 
 const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
   const distanceLatitude = deg2rad(lat2 - lat1);  // deg2rad below
@@ -22,29 +27,68 @@ const convertPositionsToArray = (lineString) =>
     .match(/\[\S{1,},\s\S{1,}\]/g)
     .map(l => l.replace(/\[|\]/g, ''));
 
-export default compose(
-  withState('handleCalories', 'calories', 0),
-  withHandlers({
-    calculateCalories: () => (journeys) => {
-      const pathes =
-        journeys.map((e) =>
-          convertPositionsToArray(
-            e.legs.reduce((lineSum, l) => lineSum + l.path.lineString, '')
-          )
-        );
-      const distances = pathes
-        .map(path =>
-          path.reduce((sum, p, i, arr) =>
-            arr[i + 1]
-            && sum + getDistanceFromLatLonInKm(...arr[i].split(','), ...arr[i + 1].split(','))
-            || sum
-            , 0)
-        );
+const getMinDistance = (journeys) => {
+  const pathes =
+    journeys.map((e) =>
+      convertPositionsToArray(
+        e.legs.reduce((lineSum, l) => lineSum + l.path.lineString, '')
+      )
+    );
+  const distances = pathes
+    .map(path =>
+      path.reduce((sum, p, i, arr) =>
+          arr[i + 1] ?
+            sum + getDistanceFromLatLonInKm(...arr[i].split(','), ...arr[i + 1].split(','))
+            : sum
+        , 0)
+    );
 
-      const minDistance = Math.min(...distances);
-      console.log('minDistance');
-      console.log(minDistance);
+  return Math.min(...distances);
+};
+
+export default compose(
+  withState('calories', 'handleCalories', 0),
+  withState('startPos', 'handleStartPos', { value: '' }),
+  withState('endPos', 'handleEndPos', { value: '' }),
+  withState('startPosOptions', 'handleStartPosOptions', ''),
+  withState('endPosOptions', 'handleEndPosOptions', ''),
+  withHandlers({
+    handleStartPositionSearch: ({ handleStartPos, handleStartPosOptions }) => ({ target }) => {
+      handleStartPos(target);
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(
+        () => target.value &&
+        fetchPlace(target.value)
+          .then(result => handleStartPosOptions(result.matches)
+          ), DONE_TYPING_INTERVAL);
+    },
+    handleEndPositionSearch: ({ handleEndPos, handleEndPosOptions }) => ({ target }) => {
+      handleEndPos(target);
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(
+        () => target.value &&
+        fetchPlace(target.value)
+          .then(result => handleEndPosOptions(result.matches)
+          ), DONE_TYPING_INTERVAL);
+    },
+    handleStartPosMenuSelect: ({ handleStartPos, handleStartPosOptions }) => (option) => {
+      handleStartPos({ ...option, value: option.name });
+      handleStartPosOptions([]);
+    },
+    handleEndPosMenuSelect: ({ handleEndPos, handleEndPosOptions }) => (option) => {
+      handleEndPos({ ...option, value: option.name });
+      handleEndPosOptions([]);
+    },
+    calculateCalories: ({ handleCalories, startPos, endPos }) => (e) => {
+      e.preventDefault();
+      const { bodyWeight } = e.target.elements;
+      fetchDistance(+startPos.icsId, +endPos.icsId)
+        .then(result => {
+            const minDistance = result && getMinDistance(result.journeys);
+            const burnedCalories = minDistance * bodyWeight.value * CALORIES_BURNING_COEFFICIENT;
+            handleCalories(burnedCalories);
+          }
+        );
     }
   })
-)
-(CaloriesCalculator);
+)(CaloriesCalculator);
